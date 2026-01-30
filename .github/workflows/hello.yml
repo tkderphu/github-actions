@@ -6,3 +6,8 @@ jobs:
     steps:
       - name: Hello World Action
         run: echo "Hello, World!"
+  quang-phu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quang Phu Action
+        run: echo "Hello, Quang Phu!"
