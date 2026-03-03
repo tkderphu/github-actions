@@ -1,11 +1,19 @@
-FROM node:18-alpine
+FROM python:3.10-slim
 
-WORKDIR /app
+WORKDIR /python-docker
 
-COPY package*.json ./
-RUN npm install --production
+COPY requirements.txt requirements.txt
+
+RUN apt-get update && apt-get install git -y
+
+RUN pip install -r requirements.txt
+
+RUN pip install "git+https://github.com/openai/whisper.git"
+
+RUN apt-get update && apt-get install -y ffmpeg
 
 COPY . .
 
-EXPOSE 3000
-CMD ["node", "index.js"]
+EXPOSE 8000
+
+CMD ["uvicorn", "fastapi_app:app", "--host", "0.0.0.0", "--port", "8000"]
