@@ -1,31 +1,34 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse, RedirectResponse
 from tempfile import NamedTemporaryFile
 import whisper
+
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
-from transformers import MarianMTModel, MarianTokenizer
 
+# === Whisper Setup ===
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# 1️⃣ Load Whisper
 whisper_model = whisper.load_model("base", device=DEVICE)
 
-# 2️⃣ Load English → Vietnamese model
-model_name = "Helsinki-NLP/opus-mt-en-vi"
-tokenizer = MarianTokenizer.from_pretrained(model_name)
-translator_model = MarianMTModel.from_pretrained(model_name).to(DEVICE)
+# === NLLB Translation Setup ===
+nllb_model_name = "facebook/nllb-200-distilled-600M"
+tokenizer = AutoTokenizer.from_pretrained(nllb_model_name, src_lang="eng_Latn")
+translator = AutoModelForSeq2SeqLM.from_pretrained(nllb_model_name)
 
 app = FastAPI()
 
 
 def translate_en_to_vi(text: str) -> str:
-    inputs = tokenizer(text, return_tensors="pt", truncation=True).to(DEVICE)
-    translated = translator_model.generate(**inputs)
-    return tokenizer.decode(translated[0], skip_special_tokens=True)
+    tokens = tokenizer(text, return_tensors="pt", padding=True)
+    generated = translator.generate(
+        **tokens,
+        forced_bos_token_id=tokenizer.lang_code_to_id["vie_Latn"]
+    )
+    return tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
 
 
 @app.post("/whisper")
-async def transcribe_and_translate(file: UploadFile = File(...)):
+async def handler(file: UploadFile = File(...)):
     if not file:
         raise HTTPException(status_code=400, detail="Audio file is required")
 
@@ -33,11 +36,11 @@ async def transcribe_and_translate(file: UploadFile = File(...)):
         temp.write(await file.read())
         temp.flush()
 
+        # Transcribe English segments
         transcription = whisper_model.transcribe(temp.name)
 
     results = []
-
-    for index, segment in enumerate(transcription["segments"]):
+    for idx, segment in enumerate(transcription["segments"]):
         english_text = segment["text"].strip()
         vietnamese_text = translate_en_to_vi(english_text)
 
@@ -46,7 +49,12 @@ async def transcribe_and_translate(file: UploadFile = File(...)):
             "vietnameseText": vietnamese_text,
             "startTimeMs": int(segment["start"] * 1000),
             "endTimeMs": int(segment["end"] * 1000),
-            "order": index + 1
+            "order": idx + 1
         })
 
     return JSONResponse(content=results)
+
+
+@app.get("/", response_class=RedirectResponse)
+async def redirect_to_docs():
+    return "/docs"
