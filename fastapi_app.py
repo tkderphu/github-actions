@@ -1,42 +1,53 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from typing import List
 from fastapi.responses import JSONResponse, RedirectResponse
+from tempfile import NamedTemporaryFile
 import whisper
 import torch
-from tempfile import NamedTemporaryFile
 
-torch.cuda.is_available()
+# ===== Device Setup =====
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Load model once at startup
 model = whisper.load_model("base", device=DEVICE)
 
 app = FastAPI()
 
 
 @app.post("/whisper")
-async def handler(files: List[UploadFile] = File(...)):
-    if not files:
+async def transcribe_audio(file: UploadFile = File(...)):
+    if not file:
         raise HTTPException(
             status_code=400,
-            detail="Only one file is allowed"
+            detail="Audio file is required"
         )
 
-    results = []
+    # Save uploaded file temporarily
+    with NamedTemporaryFile(delete=True, suffix=".mp3") as temp:
+        temp.write(await file.read())
+        temp.flush()
 
-    for file in files:
-        with NamedTemporaryFile(delete=True) as temp:
-            with open(temp.name, "wb") as temp_file:
-                temp_file.write(await file.read())
+        # Get detailed result with timestamps
+        result = model.transcribe(
+            temp.name,
+            verbose=False
+        )
 
-            result = model.transcribe(temp.name)
-
-        results.append({
-            "filename": file.filename,
-            "transcript": result["text"]
+    # Extract sentence-level segments
+    segments = []
+    for segment in result["segments"]:
+        segments.append({
+            "start": round(segment["start"], 2),
+            "end": round(segment["end"], 2),
+            "text": segment["text"].strip()
         })
 
-    return JSONResponse(content={"results": results})
+    return JSONResponse(content={
+        "filename": file.filename,
+        "language": result.get("language"),
+        "segments": segments
+    })
+
 
 @app.get("/", response_class=RedirectResponse)
 async def redirect_to_docs():
-     return "/docs"
+    return "/docs"
