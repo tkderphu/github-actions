@@ -5,6 +5,7 @@ import whisper
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import asyncio
+import httpx
 
 # =====================================
 # Device Setup
@@ -105,6 +106,57 @@ async def handler(file: UploadFile = File(...)):
     # Build response structure
     results = []
 
+    for idx, segment in enumerate(segments):
+        results.append({
+            "englishText": english_texts[idx],
+            "vietnameseText": vietnamese_texts[idx] if idx < len(vietnamese_texts) else "",
+            "startTimeMs": int(segment["start"] * 1000),
+            "endTimeMs": int(segment["end"] * 1000),
+            "order": idx + 1
+        })
+
+    return JSONResponse(content=results)
+
+
+
+@app.post("/whisper-url")
+async def handler_from_url(audio_url: str):
+    if not audio_url:
+        raise HTTPException(status_code=400, detail="audio_url is required")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(audio_url)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Cannot download audio from URL")
+
+    # Save to temp file
+    with NamedTemporaryFile(delete=True, suffix=".mp3") as temp:
+        temp.write(response.content)
+        temp.flush()
+
+        # Whisper transcription
+        transcription = await asyncio.to_thread(
+            whisper_model.transcribe,
+            temp.name
+        )
+
+    segments = transcription.get("segments", [])
+
+    if not segments:
+        return JSONResponse(content=[])
+
+    # Extract English texts
+    english_texts = [seg["text"].strip() for seg in segments]
+
+    # Translate
+    vietnamese_texts = await asyncio.to_thread(
+        translate_batch_en_to_vi,
+        english_texts
+    )
+
+    # Build response
+    results = []
     for idx, segment in enumerate(segments):
         results.append({
             "englishText": english_texts[idx],
